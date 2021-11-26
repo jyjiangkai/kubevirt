@@ -234,47 +234,65 @@ func init() {
 
 func Execute() {
 	var err error
+	// 创建virtcontroller结构实例
 	var app VirtControllerApp = VirtControllerApp{}
 
+	// 初始化leader选举配置
+	// 默认配置：
+	// leader租约期限： 15s
+	// leader更新期限： 10s
+	// 重试周期： 2s
+	// 资源锁类型支持endpoints和configmaps，默认为endpoints类型，资源锁名称为：virt-controller
 	app.LeaderElection = leaderelectionconfig.DefaultLeaderElectionConfiguration()
 
 	service.Setup(&app)
 
+	// 初始化readyChan
 	app.readyChan = make(chan bool, 1)
 
 	log.InitializeLogging("virt-controller")
 
+	// 初始化reloadableRateLimiter
 	app.reloadableRateLimiter = ratelimiter.NewReloadableRateLimiter(flowcontrol.NewTokenBucketRateLimiter(virtconfig.DefaultVirtControllerQPS, virtconfig.DefaultVirtControllerBurst))
+	// 创建k8s client实例
 	clientConfig, err := kubecli.GetKubevirtClientConfig()
 	if err != nil {
 		panic(err)
 	}
+
 	clientConfig.RateLimiter = app.reloadableRateLimiter
+	// 初始化kubevirt client
 	app.clientSet, err = kubecli.GetKubevirtClientFromRESTConfig(clientConfig)
 	if err != nil {
 		golog.Fatal(err)
 	}
 
+	// 初始化restClient
 	app.restClient = app.clientSet.RestClient()
 
 	// Bootstrapping. From here on the initialization order is important
+	// 初始化kubevirtNamespace，若k8s未开启ServiceAccount准入控制，则默认ns为kubevirt
 	app.kubevirtNamespace, err = clientutil.GetNamespace()
 	if err != nil {
 		golog.Fatalf("Error searching for namespace: %v", err)
 	}
 
+	// 初始化host
 	host, err := os.Hostname()
 	if err != nil {
 		golog.Fatalf("unable to get hostname: %v", err)
 	}
 	app.host = host
 
+	// 初始化上下文ctx
 	ctx, cancel := context.WithCancel(context.Background())
 	stopChan := ctx.Done()
 	app.ctx = ctx
 
+	// 初始化informerFactory
 	app.informerFactory = controller.NewKubeInformerFactory(app.restClient, app.clientSet, nil, app.kubevirtNamespace)
 
+	// 监听CRD与kubevirt资源
 	configMapInformer := app.informerFactory.ConfigMap()
 	app.crdInformer = app.informerFactory.CRD()
 	app.kubeVirtInformer = app.informerFactory.KubeVirt()
@@ -286,15 +304,20 @@ func Execute() {
 		cache.DefaultWatchErrorHandler(r, err)
 	})
 
+	// 等待缓存同步完成
 	cache.WaitForCacheSync(stopChan, configMapInformer.HasSynced, app.crdInformer.HasSynced, app.kubeVirtInformer.HasSynced)
 	app.clusterConfig = virtconfig.NewClusterConfig(configMapInformer, app.crdInformer, app.kubeVirtInformer, app.kubevirtNamespace)
 
+	// 初始化reInitChan
 	app.reInitChan = make(chan string, 10)
+	// 判断是否开启了CDI功能
 	app.hasCDI = app.clusterConfig.HasDataVolumeAPI()
+	// ?
 	app.clusterConfig.SetConfigModifiedCallback(app.configModificationCallback)
 	app.clusterConfig.SetConfigModifiedCallback(app.shouldChangeLogVerbosity)
 	app.clusterConfig.SetConfigModifiedCallback(app.shouldChangeRateLimiter)
 
+	// 创建webservice
 	webService := new(restful.WebService)
 	webService.Path("/").Consumes(restful.MIME_JSON).Produces(restful.MIME_JSON)
 	webService.Route(webService.GET("/healthz").To(healthz.KubeConnectionHealthzFuncFactory(app.clusterConfig, apiHealthVersion)).Doc("Health endpoint"))
@@ -307,6 +330,7 @@ func Execute() {
 
 	restful.Add(webService)
 
+	// 初始化资源informer
 	app.vmiInformer = app.informerFactory.VMI()
 	app.kvPodInformer = app.informerFactory.KubeVirtPod()
 	app.nodeInformer = app.informerFactory.KubeVirtNode()
@@ -333,6 +357,7 @@ func Execute() {
 	app.storageClassInformer = app.informerFactory.StorageClass()
 	app.allPodInformer = app.informerFactory.Pod()
 
+	// 添加CDI资源informer
 	if app.hasCDI {
 		app.dataVolumeInformer = app.informerFactory.DataVolume()
 		app.cdiInformer = app.informerFactory.CDI()
@@ -351,6 +376,7 @@ func Execute() {
 	app.flavorInformer = app.informerFactory.VirtualMachineFlavor()
 	app.clusterFlavorInformer = app.informerFactory.VirtualMachineClusterFlavor()
 
+	// 初始化各资源控制器
 	app.initCommon()
 	app.initReplicaSet()
 	app.initVirtualMachines()
@@ -359,6 +385,8 @@ func Execute() {
 	app.initSnapshotController()
 	app.initRestoreController()
 	app.initWorkloadUpdaterController()
+
+	// 启动virt-controller
 	go app.Run()
 
 	<-app.reInitChan
@@ -398,6 +426,7 @@ func (vca *VirtControllerApp) shouldChangeLogVerbosity() {
 func (vca *VirtControllerApp) Run() {
 	logger := log.Log
 
+	// 启动Promethus证书管理器
 	promCertManager := bootstrap.NewFileCertificateManager(vca.promCertFilePath, vca.promKeyFilePath)
 	go promCertManager.Start()
 	promTLSConfig := webhooks.SetupPromTLS(promCertManager)
@@ -426,6 +455,7 @@ func (vca *VirtControllerApp) Run() {
 	panic("unreachable")
 }
 
+// onStartedLeading, 选主成功后启动函数
 func (vca *VirtControllerApp) onStartedLeading() func(ctx context.Context) {
 	return func(ctx context.Context) {
 		stop := ctx.Done()
@@ -740,6 +770,7 @@ func (vca *VirtControllerApp) setupLeaderElector() (err error) {
 		return
 	}
 
+	// 初始化leaderElector，注入leader节点启动函数
 	vca.leaderElector, err = leaderelection.NewLeaderElector(
 		leaderelection.LeaderElectionConfig{
 			Lock:          rl,
