@@ -195,6 +195,7 @@ func (app *virtHandlerApp) Run() {
 	var err error
 
 	// Copy container-disk binary
+	// ? current k8s cluster have not the binary
 	targetFile := filepath.Join(app.VirtLibDir, "/init/usr/bin/container-disk")
 	err = os.MkdirAll(filepath.Dir(targetFile), os.ModePerm)
 	if err != nil {
@@ -205,24 +206,31 @@ func (app *virtHandlerApp) Run() {
 		panic(err)
 	}
 
+	// 初始化reloadableRateLimiter
 	app.reloadableRateLimiter = ratelimiter.NewReloadableRateLimiter(flowcontrol.NewTokenBucketRateLimiter(virtconfig.DefaultVirtHandlerQPS, virtconfig.DefaultVirtHandlerBurst))
+	// 创建k8s client实例
 	clientConfig, err := kubecli.GetKubevirtClientConfig()
 	if err != nil {
 		panic(err)
 	}
 	clientConfig.RateLimiter = app.reloadableRateLimiter
+	// 初始化kubevirt client
 	app.virtCli, err = kubecli.GetKubevirtClientFromRESTConfig(clientConfig)
 	if err != nil {
 		panic(err)
 	}
 
+	// 标记节点为不可调度状态
 	app.markNodeAsUnschedulable(logger)
 
+	// Bootstrapping. From here on the initialization order is important
+	// 初始化kubevirtNamespace，若k8s未开启ServiceAccount准入控制，则默认ns为kubevirt
 	app.namespace, err = clientutil.GetNamespace()
 	if err != nil {
 		glog.Fatalf("Error searching for namespace: %v", err)
 	}
 
+	// 起一个协程监听系统信号，当收到SIGTERM信号时，标记节点为不可调度状态并退出virt-handler进程
 	go func() {
 		sigint := make(chan os.Signal, 1)
 
@@ -235,6 +243,7 @@ func (app *virtHandlerApp) Run() {
 	}()
 
 	// Create event recorder
+	// 创建事件记录器
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(&k8coresv1.EventSinkImpl{Interface: app.virtCli.CoreV1().Events(k8sv1.NamespaceAll)})
 	// Scheme is used to create an ObjectReference from an Object (e.g. VirtualMachineInstance) during Event creation
