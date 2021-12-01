@@ -65,6 +65,7 @@ if [ "${target}" = "virt-handler" ]; then
     cp cmd/virt-handler/ipv6-nat.nft /etc/nftables
 
     cd cmd/container-disk-v2alpha
+    sudo yum install glibc-static
     # the containerdisk bianry needs to be static, as it runs in a scratch container
     echo "building static binary container-disk"
     gcc -static -o ${OUTPUT_DIR}/container-disk main.c
@@ -77,6 +78,7 @@ elif [ "${target}" = "virt-launcher" ]; then
     \cp -rf cmd/virt-launcher/qemu.conf /etc/libvirt
 
     cd cmd/container-disk-v2alpha
+    sudo yum install glibc-static
     # the containerdisk bianry needs to be static, as it runs in a scratch container
     echo "building static binary container-disk"
     gcc -static -o ${OUTPUT_DIR}/container-disk main.c
