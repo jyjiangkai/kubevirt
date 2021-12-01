@@ -54,33 +54,46 @@ esac
 
 # handle binaries
 
-if [ "${target}" = "install" ]; then
-    # Delete all binaries which are not present in the binaries variable to avoid branch inconsistencies
-    to_delete=$(comm -23 <(find ${CMD_OUT_DIR} -mindepth 1 -maxdepth 1 -type d | sort) <(echo $binaries | sed -e 's/cmd\///g' -e 's/ /\n/g' | sed -e "s#^#${CMD_OUT_DIR}/#" | sort))
-    rm -rf ${to_delete}
-
-    (
-        if [ -z "$BIN_NAME" ] || [[ $BIN_NAME == *"container-disk"* ]]; then
-            mkdir -p ${CMD_OUT_DIR}/container-disk-v2alpha
-            cd cmd/container-disk-v2alpha
-            # the containerdisk bianry needs to be static, as it runs in a scratch container
-            echo "building static binary container-disk"
-            gcc -static -o ${CMD_OUT_DIR}/container-disk-v2alpha/container-disk main.c
-        fi
-    )
-fi
-
-
 eval "$(go env)"
 BIN_NAME=${target}
+OUTPUT_DIR=/usr/bin
+
+if [ "${target}" = "virt-handler" ]; then
+    # gen nftables
+    mkdir -p /etc/nftables
+    cp cmd/virt-handler/ipv4-nat.nft /etc/nftables
+    cp cmd/virt-handler/ipv6-nat.nft /etc/nftables
+
+    cd cmd/container-disk-v2alpha
+    # the containerdisk bianry needs to be static, as it runs in a scratch container
+    echo "building static binary container-disk"
+    gcc -static -o ${OUTPUT_DIR}/container-disk main.c
+    cd ../../
+
+    go build -a -o ${OUTPUT_DIR}/virt-chroot cmd/virt-chroot/*.go && chmod +x ${OUTPUT_DIR}/virt-chroot
+elif [ "${target}" = "virt-launcher" ]; then
+    cp cmd/virt-launcher/node-labeller/node-labeller.sh ${OUTPUT_DIR}
+    cp -i cmd/virt-launcher/libvirtd.conf /etc/libvirt
+    cp -i cmd/virt-launcher/qemu.conf /etc/libvirt
+
+    cd cmd/container-disk-v2alpha
+    # the containerdisk bianry needs to be static, as it runs in a scratch container
+    echo "building static binary container-disk"
+    gcc -static -o ${OUTPUT_DIR}/container-disk main.c
+    cd ../../
+
+    go build -a -o ${OUTPUT_DIR}/virt-freezer cmd/virt-freezer/main.go && chmod +x ${OUTPUT_DIR}/virt-freezer
+    go build -a -o ${OUTPUT_DIR}/virt-probe cmd/virt-probe/virt-probe.go && chmod +x ${OUTPUT_DIR}/virt-probe
+elif [ "${target}" = "virt-operator" ]; then
+    go build -a -o ${OUTPUT_DIR}/csv-generator tools/csv-generator/csv-generator.go && chmod +x ${OUTPUT_DIR}/csv-generator
+fi
+
 
 # always build and link the binary based on CPU Architecture
 LINUX_NAME=${BIN_NAME}-linux-${ARCH}
 
-OUTPUT_DIR=/usr/bin
-
 go vet ./cmd/${target}/...
-cd ./cmd/${target}
+cd cmd/${target}
 
 echo "building dynamic binary $BIN_NAME"
 GOOS=linux GOARCH=${ARCH} go_build -tags selinux -o ${OUTPUT_DIR}/${LINUX_NAME} -ldflags "$(kubevirt::version::ldflags)"
