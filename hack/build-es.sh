@@ -73,8 +73,8 @@ if [ "${target}" = "virt-handler" ]; then
     go build -a -o ${OUTPUT_DIR}/virt-chroot cmd/virt-chroot/*.go && chmod +x ${OUTPUT_DIR}/virt-chroot
 elif [ "${target}" = "virt-launcher" ]; then
     cp cmd/virt-launcher/node-labeller/node-labeller.sh ${OUTPUT_DIR}
-    cp -i cmd/virt-launcher/libvirtd.conf /etc/libvirt
-    cp -i cmd/virt-launcher/qemu.conf /etc/libvirt
+    \cp -rf cmd/virt-launcher/libvirtd.conf /etc/libvirt
+    \cp -rf cmd/virt-launcher/qemu.conf /etc/libvirt
 
     cd cmd/container-disk-v2alpha
     # the containerdisk bianry needs to be static, as it runs in a scratch container
