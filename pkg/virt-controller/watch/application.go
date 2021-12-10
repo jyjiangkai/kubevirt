@@ -234,9 +234,11 @@ func init() {
 
 func Execute() {
 	var err error
+	// By jiangkai
 	// 创建virtcontroller结构实例
 	var app VirtControllerApp = VirtControllerApp{}
 
+	// By jiangkai
 	// 初始化leader选举配置
 	// 默认配置：
 	// leader租约期限： 15s
@@ -376,7 +378,8 @@ func Execute() {
 	app.flavorInformer = app.informerFactory.VirtualMachineFlavor()
 	app.clusterFlavorInformer = app.informerFactory.VirtualMachineClusterFlavor()
 
-	// 初始化各资源控制器
+	// By jiangkai
+	// 初始化virt-controller各资源控制器
 	app.initCommon()
 	app.initReplicaSet()
 	app.initVirtualMachines()
@@ -386,6 +389,7 @@ func Execute() {
 	app.initRestoreController()
 	app.initWorkloadUpdaterController()
 
+	// By jiangkai
 	// 启动virt-controller
 	go app.Run()
 
@@ -445,6 +449,8 @@ func (vca *VirtControllerApp) Run() {
 		}
 	}()
 
+	// By jiangkai
+	// 配置leader选举，注册选举回调函数
 	if err := vca.setupLeaderElector(); err != nil {
 		golog.Fatal(err)
 	}
@@ -455,6 +461,7 @@ func (vca *VirtControllerApp) Run() {
 	panic("unreachable")
 }
 
+// By jiangkai
 // onStartedLeading, 选主成功后启动函数
 func (vca *VirtControllerApp) onStartedLeading() func(ctx context.Context) {
 	return func(ctx context.Context) {

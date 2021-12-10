@@ -181,12 +181,14 @@ func NewController(
 		vmiExpectations:             controller.NewUIDTrackingControllerExpectations(controller.NewControllerExpectations()),
 	}
 
+	// 注册vmi资源创建事件回调函数
 	vmiSourceInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.addFunc,
 		DeleteFunc: c.deleteFunc,
 		UpdateFunc: c.updateFunc,
 	})
 
+	// 注册vmi资源迁移事件回调函数
 	vmiTargetInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.addFunc,
 		DeleteFunc: c.deleteFunc,
@@ -1442,6 +1444,7 @@ func (c *VirtualMachineController) Run(threadiness int, stopCh chan struct{}) {
 
 	go c.heartBeat.Run(c.heartBeatInterval, stopCh)
 
+	// 起10个协程，循环执行runWorker，循环周期为1s
 	// Start the actual work
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
@@ -1457,11 +1460,13 @@ func (c *VirtualMachineController) runWorker() {
 }
 
 func (c *VirtualMachineController) Execute() bool {
+	// 检查队列中是否有待处理的事物
 	key, quit := c.Queue.Get()
 	if quit {
 		return false
 	}
 	defer c.Queue.Done(key)
+	// 处理事物，如处理失败，再放回限速队列；处理成功，将事物出队列
 	if err := c.execute(key.(string)); err != nil {
 		log.Log.Reason(err).Infof("re-enqueuing VirtualMachineInstance %v", key)
 		c.Queue.AddRateLimited(key)
@@ -1832,17 +1837,20 @@ func (d *VirtualMachineController) defaultExecute(key string,
 }
 
 func (d *VirtualMachineController) execute(key string) error {
+	// 通过事件key从缓存中获取vmi实例对象
 	vmi, vmiExists, err := d.getVMIFromCache(key)
 	if err != nil {
 		return err
 	}
 
+	// 若vmi资源不存在，则删除事件key
 	if !vmiExists {
 		d.vmiExpectations.DeleteExpectations(key)
 	} else if !d.vmiExpectations.SatisfiedExpectations(key) {
 		return nil
 	}
 
+	// 通过事件key从缓存中获取domain对象
 	domain, domainExists, domainCachedUID, err := d.getDomainFromCache(key)
 	if err != nil {
 		return err
@@ -1855,6 +1863,7 @@ func (d *VirtualMachineController) execute(key string) error {
 		log.Log.Object(vmi).Infof("Using cached UID for vmi found in domain cache")
 	}
 
+	// 最后，如果仍然无法获取vmi.UID，查尝试从ghost记录中获取
 	// As a last effort, if the UID still can't be determined attempt
 	// to retrieve it from the ghost record
 	if string(vmi.UID) == "" {
@@ -1900,7 +1909,7 @@ func (d *VirtualMachineController) execute(key string) error {
 	// Take different execution paths depending on the state of the migration and the
 	// node this is executed on.
 
-	if vmiExists && d.isPreMigrationTarget(vmi) {
+	if vmiExists && d.isPreMigrationTarget(vmi) { // 判断vmi存在且当前节点为迁移目标节点
 		// 1. PRE-MIGRATION TARGET PREPARATION PATH
 		//
 		// If this node is the target of the vmi's migration, take
@@ -1908,7 +1917,7 @@ func (d *VirtualMachineController) execute(key string) error {
 		// the local environment for the migration, but does not
 		// start the VMI
 		return d.migrationTargetExecute(vmi, vmiExists, domainExists)
-	} else if vmiExists && d.isOrphanedMigrationSource(vmi) {
+	} else if vmiExists && d.isOrphanedMigrationSource(vmi) { // 判断vmi存在且当前节点为迁移源节点
 		// 3. POST-MIGRATION SOURCE CLEANUP
 		//
 		// After a migration, the migrated domain still exists in the old
@@ -1916,6 +1925,8 @@ func (d *VirtualMachineController) execute(key string) error {
 		// the target or owner of the VMI handles deleting the domain locally.
 		return d.migrationOrphanedSourceNodeExecute(vmi, domainExists)
 	}
+
+	// 新创建vmi
 	return d.defaultExecute(key,
 		vmi,
 		vmiExists,
@@ -2626,6 +2637,7 @@ func (d *VirtualMachineController) vmUpdateHelperDefault(origVMI *v1.VirtualMach
 			return err
 		}
 
+		// 设置虚机pod网络
 		if err := d.setPodNetworkPhase1(vmi); err != nil {
 			return fmt.Errorf("failed to configure vmi network: %w", err)
 		}
@@ -2673,6 +2685,7 @@ func (d *VirtualMachineController) vmUpdateHelperDefault(origVMI *v1.VirtualMach
 
 	options := virtualMachineOptions(smbios, period, preallocatedVolumes, d.capabilities, disksInfo, d.clusterConfig.ExpandDisksEnabled())
 
+	// 发送grpc消息给virt-launcher，创建虚机
 	err = client.SyncVirtualMachine(vmi, options)
 	if err != nil {
 		isSecbootError := strings.Contains(err.Error(), "EFI OVMF rom missing")
@@ -2781,7 +2794,9 @@ func (d *VirtualMachineController) calculateVmPhaseForStatusReason(domain *api.D
 	return vmi.Status.Phase, nil
 }
 
+// vmi资源创建回调函数
 func (d *VirtualMachineController) addFunc(obj interface{}) {
+	// 生产者。从vmi资源对象中获取事件key，并将事件key入队
 	key, err := controller.KeyFunc(obj)
 	if err == nil {
 		d.vmiExpectations.LowerExpectations(key, 1, 0)

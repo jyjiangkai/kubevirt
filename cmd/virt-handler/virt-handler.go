@@ -252,9 +252,12 @@ func (app *virtHandlerApp) Run() {
 	// Wire VirtualMachineInstance controller
 	factory := controller.NewKubeInformerFactory(app.virtCli.RestClient(), app.virtCli, nil, app.namespace)
 
+	// 监听vmiSource资源，即新增到该节点的vmi资源
 	vmiSourceInformer := factory.VMISourceHost(app.HostOverride)
+	// 监听vmiSource资源，即迁移到该节点的vmi资源
 	vmiTargetInformer := factory.VMITargetHost(app.HostOverride)
 
+	// 监听本节点上的 virt-launcher 中的 domain 实例
 	// Wire Domain controller
 	domainSharedInformer, err := virtcache.NewSharedInformer(app.VirtShareDir, int(app.WatchdogTimeoutDuration.Seconds()), recorder, vmiSourceInformer.GetStore(), time.Duration(app.domainResyncPeriodSeconds)*time.Second)
 	if err != nil {
@@ -332,6 +335,7 @@ func (app *virtHandlerApp) Run() {
 		}
 	}
 
+	// 初始化vmController实例
 	vmController := virthandler.NewController(
 		recorder,
 		app.virtCli,
@@ -351,6 +355,7 @@ func (app *virtHandlerApp) Run() {
 		capabilities,
 	)
 
+	// 运行普罗米修斯服务
 	promErrCh := make(chan error)
 	go app.runPrometheusServer(promErrCh)
 
@@ -400,6 +405,7 @@ func (app *virtHandlerApp) Run() {
 
 	cache.WaitForCacheSync(stop, factory.ConfigMap().HasSynced, vmiSourceInformer.HasSynced, factory.CRD().HasSynced)
 
+	// 运行vmController
 	go vmController.Run(10, stop)
 
 	doneCh := make(chan string)

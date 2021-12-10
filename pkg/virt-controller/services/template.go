@@ -445,6 +445,8 @@ func (t *templateService) addPVCToLaunchManifest(volume v1.Volume, claimName str
 	return nil
 }
 
+// By jiangkai
+// 创建virt-launcher pod模板
 func (t *templateService) renderLaunchManifest(vmi *v1.VirtualMachineInstance, imageIDs map[string]string, tempPod bool) (*k8sv1.Pod, error) {
 	precond.MustNotBeNil(vmi)
 	domain := precond.MustNotBeEmpty(vmi.GetObjectMeta().GetName())
